@@ -85,22 +85,22 @@ if __name__ == "__main__":
         loss_params=args.loss_params,
         mode=args.mode,
         node_histogram=histogram,
-        pocket_representation=args.pocket_representation
+        pocket_representation=args.pocket_representation,
     )
 
     logger = pl.loggers.WandbLogger(
         save_dir=args.logdir,
-        project='ligand-pocket-ddpm',
+        project="thesis",
         group=args.dataset,
         name=args.run_name,
         id=args.run_name,
-        resume='must' if args.resume is not None else False,
+        resume="must" if args.resume is not None else False,
         entity=args.wandb_params.entity,
         mode=args.wandb_params.mode,
     )
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        dirpath=Path(out_dir, 'checkpoints'),
+        dirpath=Path(out_dir, "checkpoints"),
         filename="best-model-epoch={epoch:02d}",
         monitor="loss/val",
         # auto_insert_metric_name=False,
