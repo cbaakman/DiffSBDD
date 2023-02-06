@@ -448,7 +448,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
         # follows from the definition of mu_{t->s} and Equ. (7) in the EDM paper
         # changes made
         mu_lig_x = (
-            zt_lig[:, :n_samples] / alpha_t_given_s[ligand_mask]
+            zt_lig[:, :self.n_dims] / alpha_t_given_s[ligand_mask]
             - (sigma2_t_given_s / alpha_t_given_s / sigma_t)[ligand_mask] * eps_t_lig_x
         )
 
@@ -460,7 +460,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
         zs_lig_x, xh0_pocket = self.sample_normal_zero_com(
             mu_lig_x, xh0_pocket, sigma, ligand_mask, pocket_mask, fix_noise
         )
-        zs_lig = torch.cat((zs_lig_x, zt_lig[:, n_samples:]), dim=1)
+        zs_lig = torch.cat((zs_lig_x, zt_lig[:, self.n_dims:]), dim=1)
 
         self.assert_mean_zero_with_mask(zt_lig[:, : self.n_dims], ligand_mask)
 

@@ -33,7 +33,7 @@ if __name__ == "__main__":
     )
     x_peptide = xh_peptide[:, : model.x_dims]
     atom_level = False if model.pocket_representation == "CA" else True
-    size = len(x_peptide) / args.n_samples
+    size = int(len(x_peptide) / args.n_samples)
 
     for i in range(args.n_samples):
         write_updated_peptide_coords_pdb(

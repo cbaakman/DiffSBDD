@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 import torch.nn.functional as F
 from scipy.ndimage import gaussian_filter
 
-from Bio.PDB import PDBParser
+from Bio.PDB import PDBParser, PDBIO
 
 # from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
 from Bio.PDB.Polypeptide import three_to_one
@@ -102,9 +102,11 @@ def process_pmhc_pdb_file(
     mhc = pdb_model["M"]
     peptide = pdb_model["P"]
 
-    mhc_coords, mhc_types = get_coords_and_types(mhc, encoder, atom_level=atom_level)
+    mhc_coords, mhc_types = get_coords_and_types(
+        mhc, encoder, atom_level=atom_level, device=device
+    )
     peptide_coords, peptide_types = get_coords_and_types(
-        peptide, encoder, atom_level=atom_level
+        peptide, encoder, atom_level=atom_level, device=device
     )
 
     mhc_one_hot = F.one_hot(mhc_types, num_classes=len(encoder))
@@ -289,12 +291,12 @@ def write_updated_peptide_coords_pdb(
     # Update the peptide coordinates
     for i, element in enumerate(peptide_elements):
         if atom_level:
-            element.set_coord(peptide["x"][i])
+            element.set_coord(peptide[i])
         else:
             for atom in element:
-                atom.set_coord(peptide["x"][i])
+                atom.set_coord(peptide[i])
 
     # Write the new pdb file
     io = PDBIO()
     io.set_structure(structure)
-    io.save(pdb_output_path)
+    io.save(str(pdb_output_path))
