@@ -14,6 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--outdir", type=Path)
     parser.add_argument("--n_samples", type=int, default=5)
     parser.add_argument("--timesteps", type=int, default=None)
+    parser.add_argument("--atom_level", type=bool, default=False)
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -26,13 +27,16 @@ if __name__ == "__main__":
     encoder = model.pocket_type_encoder
     decoder = model.pocket_type_decoder
 
+    atom_level = args.atom_level
     xh_peptide = model.generate_peptides(
         args.pdbfile,
         args.n_samples,
         timesteps=args.timesteps,
+        atom_level=atom_level,
     )
     x_peptide = xh_peptide[:, : model.x_dims]
-    atom_level = False if model.pocket_representation == "CA" else True
+    #    atom_level = False if model.pocket_representation == "CA" else True
+
     size = int(len(x_peptide) / args.n_samples)
 
     for i in range(args.n_samples):
