@@ -118,28 +118,28 @@ class LigandPocketDDPM(pl.LightningModule):
         self.val_dataset = None
         self.test_dataset = None
 
-        # with open(Path(datadir) / "encoder.json") as f:
-        #     encoder = json.load(f)
-        # with open(Path(datadir) / "decoder.json") as f:
-        #     encoder = json.load(f)
+        with open(Path(datadir) / "encoder.json") as f:
+            encoder = json.load(f)
+        with open(Path(datadir) / "decoder.json") as f:
+            decoder = json.load(f)
 
-        # self.lig_type_encoder = encoder
-        # self.lig_type_decoder = decoder
-        # self.pocket_type_encoder = encoder
-        # self.pocket_type_decoder = decoder
+        self.lig_type_encoder = encoder
+        self.lig_type_decoder = decoder
+        self.pocket_type_encoder = encoder
+        self.pocket_type_decoder = decoder
 
-        self.lig_type_encoder = self.dataset_info["atom_encoder"]
-        self.lig_type_decoder = self.dataset_info["atom_decoder"]
-        self.pocket_type_encoder = (
-            self.dataset_info["aa_encoder"]
-            if self.pocket_representation == "CA"
-            else self.dataset_info["atom_encoder"]
-        )
-        self.pocket_type_decoder = (
-            self.dataset_info["aa_decoder"]
-            if self.pocket_representation == "CA"
-            else self.dataset_info["atom_decoder"]
-        )
+        # self.lig_type_encoder = self.dataset_info["atom_encoder"]
+        # self.lig_type_decoder = self.dataset_info["atom_decoder"]
+        # self.pocket_type_encoder = (
+        #     self.dataset_info["aa_encoder"]
+        #     if self.pocket_representation == "CA"
+        #     else self.dataset_info["atom_encoder"]
+        # )
+        # self.pocket_type_decoder = (
+        #     self.dataset_info["aa_decoder"]
+        #     if self.pocket_representation == "CA"
+        #     else self.dataset_info["atom_decoder"]
+        # )
 
         self.atom_nf = len(self.lig_type_decoder)
         self.aa_nf = len(self.pocket_type_decoder)
@@ -995,6 +995,7 @@ class LigandPocketDDPM(pl.LightningModule):
         pdb_path,
         n_samples=5,
         timesteps=None,
+        atom_level=True,
         **kwargs,
     ):
         """
@@ -1007,11 +1008,11 @@ class LigandPocketDDPM(pl.LightningModule):
         Returns:
             list of molecules
         """
-        atom_level = False if self.pocket_representation == "CA" else True
+        # atom_level = False if self.pocket_representation == "CA" else True
         peptide, pocket = process_pmhc_pdb_file(
             pdb_path,
+            self.pocket_type_encoder,
             atom_level=atom_level,
-            encoder=self.pocket_type_encoder,
             n_samples=n_samples,
             device=self.device,
         )

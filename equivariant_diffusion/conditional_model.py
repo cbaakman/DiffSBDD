@@ -118,11 +118,14 @@ class ConditionalDDPM(EnVariationalDiffusion):
         gamma_0 = self.gamma(t_zeros)
         # Computes sqrt(sigma_0^2 / alpha_0^2)
         sigma_x = self.SNR(-0.5 * gamma_0)
-        net_out_lig, _ = self.dynamics(
+        # net_out_lig, _ = self.dynamics(
+        #     z0_lig, xh0_pocket, t_zeros, lig_mask, pocket_mask
+        # )
+        # # changes made here
+        # net_out_lig_x = net_out_lig[:, : self.n_dims]
+        net_out_lig_x = self.dynamics(
             z0_lig, xh0_pocket, t_zeros, lig_mask, pocket_mask
         )
-        # changes made here
-        net_out_lig_x = net_out_lig[:, : self.n_dims]
 
         z0_lig_x = z0_lig[:, : self.n_dims]
 
@@ -285,11 +288,14 @@ class ConditionalDDPM(EnVariationalDiffusion):
         )
 
         # Neural net prediction.
-        net_xh_out_lig, _ = self.dynamics(
+        # net_xh_out_lig, _ = self.dynamics(
+        #     z_t_lig, xh_pocket, t, ligand["mask"], pocket["mask"]
+        # )
+        # # added to only update x
+        # net_out_lig = net_xh_out_lig[:, : self.n_dims]
+        net_out_lig = self.dynamics(
             z_t_lig, xh_pocket, t, ligand["mask"], pocket["mask"]
         )
-        # added to only update x
-        net_out_lig = net_xh_out_lig[:, : self.n_dims]
 
         # For LJ loss term
         # xh_lig_hat does not need to be zero-centered as it is only used for
@@ -347,7 +353,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
                 xh0_lig, xh0_pocket, ligand["mask"], pocket["mask"], gamma_0
             )
 
-            net_out_0_lig, _ = self.dynamics(
+            net_out_0_lig = self.dynamics(
                 z_0_lig, xh_pocket, t_zeros, ligand["mask"], pocket["mask"]
             )
 
@@ -440,15 +446,16 @@ class ConditionalDDPM(EnVariationalDiffusion):
 
         # Neural net prediction.
         # changes made
-        eps_t_lig, _ = self.dynamics(zt_lig, xh0_pocket, t, ligand_mask, pocket_mask)
-        eps_t_lig_x = eps_t_lig[:, : self.n_dims]
+        # eps_t_lig, _ = self.dynamics(zt_lig, xh0_pocket, t, ligand_mask, pocket_mask)
+        # eps_t_lig_x = eps_t_lig[:, : self.n_dims]
+        eps_t_lig_x = self.dynamics(zt_lig, xh0_pocket, t, ligand_mask, pocket_mask)
 
         # Compute mu for p(zs | zt).
         # Note: mu_{t->s} = 1 / alpha_{t|s} z_t - sigma_{t|s}^2 / sigma_t / alpha_{t|s} epsilon
         # follows from the definition of mu_{t->s} and Equ. (7) in the EDM paper
         # changes made
         mu_lig_x = (
-            zt_lig[:, :self.n_dims] / alpha_t_given_s[ligand_mask]
+            zt_lig[:, : self.n_dims] / alpha_t_given_s[ligand_mask]
             - (sigma2_t_given_s / alpha_t_given_s / sigma_t)[ligand_mask] * eps_t_lig_x
         )
 
@@ -460,7 +467,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
         zs_lig_x, xh0_pocket = self.sample_normal_zero_com(
             mu_lig_x, xh0_pocket, sigma, ligand_mask, pocket_mask, fix_noise
         )
-        zs_lig = torch.cat((zs_lig_x, zt_lig[:, self.n_dims:]), dim=1)
+        zs_lig = torch.cat((zs_lig_x, zt_lig[:, self.n_dims :]), dim=1)
 
         self.assert_mean_zero_with_mask(zt_lig[:, : self.n_dims], ligand_mask)
 
@@ -495,7 +502,9 @@ class ConditionalDDPM(EnVariationalDiffusion):
         n_samples = len(pocket["size"])
         device = pocket["x"].device
 
-        _, pocket = self.normalize(pocket=pocket)
+        lig, pocket = self.normalize(
+            pocket=pocket, ligand={"x": 0, "one_hot": lig_one_hot}
+        )
 
         # xh0_pocket is the original pocket while xh_pocket might be a
         # translated version of it
@@ -514,7 +523,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
         z_lig_x, xh_pocket = self.sample_normal_zero_com(
             mu_lig_x, xh0_pocket, sigma, lig_mask, pocket["mask"]
         )
-        z_lig = torch.cat((z_lig_x, lig_one_hot), dim=1)
+        z_lig = torch.cat((z_lig_x, lig["one_hot"]), dim=1)
 
         self.assert_mean_zero_with_mask(z_lig[:, : self.n_dims], lig_mask)
 
@@ -542,7 +551,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
         x_lig, _, x_pocket, h_pocket = self.sample_p_xh_given_z0(
             z_lig, xh_pocket, lig_mask, pocket["mask"], n_samples
         )
-        h_lig = lig_one_hot
+        h_lig = lig["one_hot"]
 
         self.assert_mean_zero_with_mask(x_lig, lig_mask)
 
