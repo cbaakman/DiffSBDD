@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from equivariant_diffusion.egnn_new import EGNN, GNN
@@ -5,6 +7,7 @@ from equivariant_diffusion.en_diffusion import EnVariationalDiffusion
 
 remove_mean_batch = EnVariationalDiffusion.remove_mean_batch
 import numpy as np
+from torch_geometric.nn.encoding import PositionalEncoding
 
 
 class EGNNDynamics(nn.Module):
@@ -25,6 +28,8 @@ class EGNNDynamics(nn.Module):
         norm_constant=0,
         inv_sublayers=2,
         sin_embedding=False,
+        sin_encoding=False,
+        sin_encoding_freq=1 / 9,
         normalization_factor=100,
         aggregation_method="sum",
         update_pocket_coords=True,
@@ -72,7 +77,7 @@ class EGNNDynamics(nn.Module):
         if mode == "egnn_dynamics":
             self.egnn = EGNN(
                 in_node_nf=dynamics_node_nf,
-                in_edge_nf=1,
+                in_edge_nf=joint_nf,
                 hidden_nf=hidden_nf,
                 device=device,
                 act_fn=act_fn,
@@ -82,6 +87,7 @@ class EGNNDynamics(nn.Module):
                 norm_constant=norm_constant,
                 inv_sublayers=inv_sublayers,
                 sin_embedding=sin_embedding,
+                sin_encoding=sin_encoding,
                 normalization_factor=normalization_factor,
                 aggregation_method=aggregation_method,
             )
@@ -102,6 +108,11 @@ class EGNNDynamics(nn.Module):
                 aggregation_method=aggregation_method,
             )
 
+        if sin_encoding:
+            self.sin_encoding = PositionalEncoding(
+                joint_nf, base_freq=sin_encoding_freq, granularity=1 / math.pi
+            )
+
         self.device = device
         self.n_dims = n_dims
         self.condition_time = condition_time
@@ -117,6 +128,9 @@ class EGNNDynamics(nn.Module):
         # embed atom features and residue features in a shared space
         h_atoms = self.atom_encoder(h_atoms)
         h_residues = self.residue_encoder(h_residues)
+
+        if self.sin_encoding is not None:
+            h_atoms = h_atoms + self.sin_encoding(torch.arange(len(h_atoms)))
 
         # combine the two node types
         x = torch.cat((x_atoms, x_residues), dim=0)
@@ -135,6 +149,22 @@ class EGNNDynamics(nn.Module):
         # get edges of a complete graph
         edges = self.get_edges(mask, x)
 
+        if self.sin_encoding is not None:
+            edge_attr = torch.zeros(edges.shape[0], h.shape[1]).to(self.device)
+            # get the subset of edges between atoms and atoms for each batch
+            edges_atoms = self.get_edges(mask_atoms, x_atoms)
+            edge_diff = edges_atoms[0] - edges_atoms[1]
+            atom_edge_attr = self.sin_encoding(edge_diff)
+
+            _, sizes = torch.unique(edges_atoms[0], return_counts=True)
+            atom_nodes = edges_atoms[0].unique()
+            atom_starts = torch.searchsorted(new_edges[0], atom_nodes)
+            atom_index = torch.repeat_interleave(atom_starts, sizes[mask_atoms])
+            atom_index = atom_index + torch.concatenate(
+                [torch.arange(s) for s in sizes[mask_atoms]]
+            )
+            edge_attr[atom_index] = atom_edge_attr
+
         if self.mode == "egnn_dynamics":
             update_coords_mask = (
                 None
@@ -144,7 +174,7 @@ class EGNNDynamics(nn.Module):
                 ).unsqueeze(1)
             )
             h_final, x_final = self.egnn(
-                h, x, edges, update_coords_mask=update_coords_mask
+                h, x, edges, update_coords_mask=update_coords_mask, edge_attr=edge_attr
             )
             vel = x_final - x
 

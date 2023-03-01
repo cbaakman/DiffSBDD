@@ -159,6 +159,7 @@ class LigandPocketDDPM(pl.LightningModule):
             norm_constant=egnn_params.norm_constant,
             inv_sublayers=egnn_params.inv_sublayers,
             sin_embedding=egnn_params.sin_embedding,
+            sin_encoding=egnn_params.sin_encoding,
             normalization_factor=egnn_params.normalization_factor,
             aggregation_method=egnn_params.aggregation_method,
             edge_cutoff=egnn_params.__dict__.get("edge_cutoff"),
