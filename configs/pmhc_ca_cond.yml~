@@ -1,4 +1,4 @@
-run_name: 'pmhc_ca_cond_edgecutoff_test'
+run_name: 'pmhc_ca_cond_hla_a_long'
 logdir: './logs/'
 wandb_params:
   mode: 'online'  # disabled, offline, online
@@ -13,7 +13,7 @@ pocket_representation: 'CA'
 batch_size: 32
 lr: 5.0e-4
 n_epochs: 3000
-num_workers: 18
+num_workers: 72
 gpus: 1
 clip_grad: True
 augment_rotation: False
@@ -27,7 +27,7 @@ loss_params:
 
 egnn_params:
   device: 'cuda'
-  edge_cutoff: 10
+  edge_cutoff: null
   joint_nf: 32
   hidden_nf: 64
   n_layers: 3

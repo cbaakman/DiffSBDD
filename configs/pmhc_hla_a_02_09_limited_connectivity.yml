@@ -1,8 +1,9 @@
-run_name: 'pmhc_ca_cond_edgecutoff_test'
+run_name: 'cutoff_12_no_node'
 logdir: './logs/'
 wandb_params:
   mode: 'online'  # disabled, offline, online
   entity: 'siemteusink'
+  group: 'hla_a_connectivity_no_node'
 dataset: 'pmhc'
 datadir: './data/pmhc/ca/'
 enable_progress_bar: False
@@ -12,7 +13,7 @@ mode: 'pocket_conditioning'
 pocket_representation: 'CA'
 batch_size: 32
 lr: 5.0e-4
-n_epochs: 3000
+n_epochs: 2000
 num_workers: 18
 gpus: 1
 clip_grad: True
@@ -27,7 +28,7 @@ loss_params:
 
 egnn_params:
   device: 'cuda'
-  edge_cutoff: 10
+  edge_cutoff: 12.0
   joint_nf: 32
   hidden_nf: 64
   n_layers: 3
@@ -37,6 +38,7 @@ egnn_params:
   inv_sublayers: 1
   sin_embedding: True
   sin_encoding: True
+  use_nodes_noise_prediction: False
   aggregation_method: 'sum'
   normalization_factor: 100  # used if aggregation_method='sum'
 
@@ -47,11 +49,11 @@ diffusion_params:
   diffusion_loss_type: 'l2'
   normalize_factors: [1, 2]  # [x, h]
 
-eval_epochs: 500
+eval_epochs: 100
 visualize_sample_epoch: 75
 visualize_chain_epoch: 10
 eval_params:
-  n_eval_samples: 5
+  n_eval_samples: 10
   eval_batch_size: 32
   smiles_file:
   n_visualize_samples: 5

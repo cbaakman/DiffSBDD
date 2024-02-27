@@ -17,6 +17,7 @@ class ConditionalDDPM(EnVariationalDiffusion):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert not self.dynamics.update_pocket_coords
+        
 
     def kl_prior(self, xh_lig, mask_lig, num_nodes):
         """Computes the KL between q(z1 | x) and the prior p(z1) = Normal(0, 1).
@@ -111,7 +112,15 @@ class ConditionalDDPM(EnVariationalDiffusion):
         return log_p_x_given_z0_without_constants_ligand, log_ph_given_z0_ligand
 
     def sample_p_xh_given_z0(
-        self, z0_lig, xh0_pocket, lig_mask, pocket_mask, batch_size, fix_noise=False
+        self,
+        z0_lig,
+        xh0_pocket,
+        lig_mask,
+        pocket_mask,
+        batch_size,
+        fix_noise=False,
+        guided=False,
+        gradient_scale=1.0,
     ):
         """Samples x ~ p(x|z0)."""
         t_zeros = torch.zeros(size=(batch_size, 1), device=z0_lig.device)
@@ -131,6 +140,13 @@ class ConditionalDDPM(EnVariationalDiffusion):
 
         # Compute mu for p(zs | zt).
         mu_x_lig = self.compute_x_pred(net_out_lig_x, z0_lig_x, gamma_0, lig_mask)
+
+        if guided:
+            de_d_lig_x = self.energy_guider.get_energy_gradient(
+                z0_lig, xh0_pocket, lig_mask, pocket_mask
+            )
+            mu_lig_x = mu_lig_x - gradient_scale * de_d_lig_x * sigma_x
+
         x_lig, xh0_pocket = self.sample_normal_zero_com(
             mu_x_lig, xh0_pocket, sigma_x, lig_mask, pocket_mask, fix_noise
         )
@@ -367,7 +383,8 @@ class ConditionalDDPM(EnVariationalDiffusion):
             loss_0_h = -log_ph_given_z0
 
         # sample size prior
-        log_pN = self.log_pN(ligand["size"], pocket["size"])
+        # log_pN = self.log_pN(ligand["size"], pocket["size"])
+        # log_pN = torch.zeros((1,1), device=ligand["x"].device)
 
         info = {
             "eps_hat_lig_x": scatter_mean(
@@ -387,7 +404,8 @@ class ConditionalDDPM(EnVariationalDiffusion):
             loss_0_h,
             neg_log_constants,
             kl_prior,
-            log_pN,
+            # log_pN,
+            torch.tensor(0.0),
             t_int.squeeze(),
             xh_lig_hat,
         )
@@ -429,7 +447,17 @@ class ConditionalDDPM(EnVariationalDiffusion):
         return zt_lig, xh0_pocket
 
     def sample_p_zs_given_zt(
-        self, s, t, zt_lig, xh0_pocket, ligand_mask, pocket_mask, fix_noise=False
+        self,
+        s,
+        t,
+        zt_lig,
+        xh0_pocket,
+        ligand_mask,
+        pocket_mask,
+        fix_noise=False,
+        guided=False,
+        gradient_scale=1.0,
+        guidance_starts_at=0,
     ):
         """Samples from zs ~ p(zs | zt). Only used during sampling."""
         gamma_s = self.gamma(s)
@@ -462,6 +490,13 @@ class ConditionalDDPM(EnVariationalDiffusion):
         # Compute sigma for p(zs | zt).
         sigma = sigma_t_given_s * sigma_s / sigma_t
 
+        # If guided, move the sampling mean towards the lower energy region.
+        if guided and self.T - t >= guidance_starts_at:
+            de_d_lig_x = self.energy_guider.get_energy_gradient(
+                zt_lig, xh0_pocket, ligand_mask, pocket_mask
+            )
+            mu_lig_x = mu_lig_x - gradient_scale * de_d_lig_x * sigma
+
         # Sample zs given the parameters derived from zt.
         # changes made
         zs_lig_x, xh0_pocket = self.sample_normal_zero_com(
@@ -489,7 +524,15 @@ class ConditionalDDPM(EnVariationalDiffusion):
 
     @torch.no_grad()
     def sample_given_pocket(
-        self, pocket, lig_one_hot, lig_mask, return_frames=1, timesteps=None
+        self,
+        pocket,
+        lig_one_hot,
+        lig_mask,
+        return_frames=1,
+        timesteps=None,
+        guided=False,
+        gradient_scale=1.0,
+        guidance_starts_at=0,
     ):
         """
         Draw samples from the generative model. Optionally, return intermediate
@@ -538,7 +581,14 @@ class ConditionalDDPM(EnVariationalDiffusion):
             t_array = t_array / timesteps
 
             z_lig, xh_pocket = self.sample_p_zs_given_zt(
-                s_array, t_array, z_lig, xh_pocket, lig_mask, pocket["mask"]
+                s_array,
+                t_array,
+                z_lig,
+                xh_pocket,
+                lig_mask, pocket["mask"],
+                guided=guided,
+                gradient_scale=gradient_scale,
+                guidance_starts_at=guidance_starts_at,
             )
 
             # save frame

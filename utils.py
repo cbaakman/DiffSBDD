@@ -145,6 +145,45 @@ def num_nodes_to_batch_mask(n_samples, num_nodes, device):
     return torch.repeat_interleave(sample_inds, num_nodes)
 
 
+def extend_batch_n_samples(batch, n_samples):
+    """
+    Extend a pocket or ligand batch to have n repeating samples.
+
+    Each batch is a dictionary with the following key, value combinations:
+    'x': (n_nodes, n_features)
+    'size': (n_samples,)
+    'mask': (n_nodes,)
+    'one_hot': (n_nodes, n_atom_types)
+    """
+    new_batch = {}
+
+    # chunk up the data based on the mask an repeat each chunk
+    # n_samples times
+    x_list = batch_to_list(batch['x'], batch['mask'])
+    x_new = torch.cat([x.repeat(n_samples, 1) for x in x_list], dim=0)
+    new_batch['x'] = x_new.to(batch['x'].device)
+
+    one_hot_list = batch_to_list(batch['one_hot'], batch['mask'])
+    one_hot_new = torch.cat([x.repeat(n_samples, 1) for x in one_hot_list], dim=0)
+    new_batch['one_hot'] = one_hot_new.to(batch['one_hot'].device)
+
+    # set the new sizes
+    new_batch['size'] = torch.repeat_interleave(batch['size'], n_samples, dim=0).to(batch['size'].device)
+
+    # based on the new sizes, create the new mask
+    new_mask = torch.repeat_interleave(torch.arange(len(new_batch['size'])).to(batch['mask'].device), new_batch['size'])
+    new_batch['mask'] = new_mask
+
+    return new_batch
+
+
+    
+
+
+
+
+
+
 def rdmol_to_nxgraph(rdmol):
     graph = nx.Graph()
     for atom in rdmol.GetAtoms():

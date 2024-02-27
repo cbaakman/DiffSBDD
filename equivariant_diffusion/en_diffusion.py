@@ -21,7 +21,8 @@ class EnVariationalDiffusion(nn.Module):
             n_dims: int, size_histogram: Dict,
             timesteps: int = 1000, parametrization='eps',
             noise_schedule='learned', noise_precision=1e-4,
-            loss_type='vlb', norm_values=(1., 1.), norm_biases=(None, 0.)):
+            loss_type='vlb', norm_values=(1., 1.), norm_biases=(None, 0.),
+            energy_guider=None):
         super().__init__()
 
         assert loss_type in {'vlb', 'l2'}

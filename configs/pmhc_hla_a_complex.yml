@@ -1,8 +1,9 @@
-run_name: 'pmhc_ca_cond_edgecutoff_test'
+run_name: 'complex-poly-3'
 logdir: './logs/'
 wandb_params:
   mode: 'online'  # disabled, offline, online
   entity: 'siemteusink'
+  group: 'hla_a_complex'
 dataset: 'pmhc'
 datadir: './data/pmhc/ca/'
 enable_progress_bar: False
@@ -12,9 +13,9 @@ mode: 'pocket_conditioning'
 pocket_representation: 'CA'
 batch_size: 32
 lr: 5.0e-4
-n_epochs: 3000
+n_epochs: 2000
 num_workers: 18
-gpus: 1
+gpus: 2
 clip_grad: True
 augment_rotation: False
 augment_noise: 0
@@ -27,7 +28,7 @@ loss_params:
 
 egnn_params:
   device: 'cuda'
-  edge_cutoff: 10
+  edge_cutoff: null
   joint_nf: 32
   hidden_nf: 64
   n_layers: 3
@@ -38,16 +39,17 @@ egnn_params:
   sin_embedding: True
   sin_encoding: True
   aggregation_method: 'sum'
+  use_nodes_noise_prediction: False
   normalization_factor: 100  # used if aggregation_method='sum'
 
 diffusion_params:
   diffusion_steps: 1000
-  diffusion_noise_schedule: 'polynomial_2'
+  diffusion_noise_schedule: 'polynomial_3'
   diffusion_noise_precision: 1.0e-4
   diffusion_loss_type: 'l2'
   normalize_factors: [1, 2]  # [x, h]
 
-eval_epochs: 500
+eval_epochs: 200
 visualize_sample_epoch: 75
 visualize_chain_epoch: 10
 eval_params:

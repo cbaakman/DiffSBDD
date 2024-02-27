@@ -15,9 +15,11 @@ def merge_args_and_yaml(args, config_dict):
     arg_dict = args.__dict__
     for key, value in config_dict.items():
         if key in arg_dict:
-            warnings.warn(f"Command line argument '{key}' (value: "
-                          f"{arg_dict[key]}) will be overwritten with value "
-                          f"{value} provided in the config file.")
+            warnings.warn(
+                f"Command line argument '{key}' (value: "
+                f"{arg_dict[key]}) will be overwritten with value "
+                f"{value} provided in the config file."
+            )
         if isinstance(value, dict):
             arg_dict[key] = Namespace(**value)
         else:
@@ -31,9 +33,11 @@ def merge_configs(config, resume_config):
         if isinstance(value, Namespace):
             value = value.__dict__
         if key in config and config[key] != value:
-            warnings.warn(f"Config parameter '{key}' (value: "
-                          f"{config[key]}) will be overwritten with value "
-                          f"{value} from the checkpoint.")
+            warnings.warn(
+                f"Config parameter '{key}' (value: "
+                f"{config[key]}) will be overwritten with value "
+                f"{value} from the checkpoint."
+            )
         config[key] = value
     return config
 
@@ -43,27 +47,32 @@ def merge_configs(config, resume_config):
 # ______________________________________________________________________________
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument('--config', type=str, required=True)
-    p.add_argument('--resume', type=str, default=None)
+    p.add_argument("--config", type=str, required=True)
+    p.add_argument("--resume", type=str, default=None)
+    p.add_argument("--tmp_dir", type=Path, default=None)
     args = p.parse_args()
 
-    with open(args.config, 'r') as f:
+    with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    assert 'resume' not in config
+    assert "resume" not in config
 
     # Get main config
     ckpt_path = None if args.resume is None else Path(args.resume)
     if args.resume is not None:
-        resume_config = torch.load(
-            ckpt_path, map_location=torch.device('cpu'))['hyper_parameters']
+        resume_config = torch.load(ckpt_path, map_location=torch.device("cpu"))[
+            "hyper_parameters"
+        ]
 
         config = merge_configs(config, resume_config)
 
     args = merge_args_and_yaml(args, config)
+    if args.tmp_dir is not None:
+        args.datadir = args.tmp_dir
 
     out_dir = Path(args.logdir, args.run_name)
-    histogram_file = Path(args.datadir, 'size_distribution.npy')
+    out_dir.mkdir(exist_ok=True, parents=True)
+    histogram_file = Path(args.datadir, "size_distribution.npy")
     histogram = np.load(histogram_file).tolist()
     pl_module = LigandPocketDDPM(
         outdir=out_dir,
@@ -91,7 +100,7 @@ if __name__ == "__main__":
     logger = pl.loggers.WandbLogger(
         save_dir=args.logdir,
         project="thesis",
-        group=args.dataset,
+        group=args.wandb_params.group,
         name=args.run_name,
         id=args.run_name,
         resume="must" if args.resume is not None else False,
@@ -115,11 +124,12 @@ if __name__ == "__main__":
         callbacks=[checkpoint_callback],
         enable_progress_bar=args.enable_progress_bar,
         num_sanity_val_steps=args.num_sanity_val_steps,
-        accelerator='gpu', devices=args.gpus,
-        strategy=('ddp' if args.gpus > 1 else None)
+        accelerator="gpu",
+        devices=args.gpus,
+        strategy=("ddp" if args.gpus > 1 else None),
     )
 
     trainer.fit(model=pl_module, ckpt_path=ckpt_path)
 
-    # # run test set
-    # result = trainer.test(ckpt_path='best')
+    # run test set
+    result = trainer.test(ckpt_path="last")

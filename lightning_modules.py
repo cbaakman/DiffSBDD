@@ -2,7 +2,7 @@ import math
 from argparse import Namespace
 import json
 from typing import Optional
-from time import time
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,9 +23,13 @@ from equivariant_diffusion.conditional_model import (
     SimpleConditionalDDPM,
 )
 from dataset import ProcessedLigandPocketDataset
-from dataset_pmhc import process_pmhc_pdb_file
 import utils
-from analysis.visualization import save_xyz_file, visualize, visualize_chain
+from analysis.visualization import (
+    save_xyz_file,
+    visualize,
+    visualize_chain,
+    plot_rmsd_distribution,
+)
 from analysis.metrics import (
     check_stability,
     BasicMolecularMetrics,
@@ -118,6 +122,11 @@ class LigandPocketDDPM(pl.LightningModule):
         self.val_dataset = None
         self.test_dataset = None
 
+        self.test_timesteps = None
+        self.test_batch_size = None
+        self.test_n_samples = None
+        self.test_n_time_batches = None
+
         with open(Path(datadir) / "encoder.json") as f:
             encoder = json.load(f)
         with open(Path(datadir) / "decoder.json") as f:
@@ -144,6 +153,10 @@ class LigandPocketDDPM(pl.LightningModule):
         self.atom_nf = len(self.lig_type_decoder)
         self.aa_nf = len(self.pocket_type_decoder)
         self.x_dims = 3
+        if hasattr(egnn_params, "use_nodes_noise_prediction"):
+            use_nodes = egnn_params.use_nodes_noise_prediction
+        else:
+            use_nodes = True
 
         net_dynamics = EGNNDynamics(
             atom_nf=self.atom_nf,
@@ -164,6 +177,7 @@ class LigandPocketDDPM(pl.LightningModule):
             aggregation_method=egnn_params.aggregation_method,
             edge_cutoff=egnn_params.__dict__.get("edge_cutoff"),
             update_pocket_coords=(self.mode == "joint"),
+            use_nodes_noise_prediction=use_nodes,
         )
 
         self.ddpm = ddpm_models[self.mode](
@@ -202,9 +216,10 @@ class LigandPocketDDPM(pl.LightningModule):
                 Path(self.datadir, "val.npz")
             )
         elif stage == "test":
-            self.test_dataset = ProcessedLigandPocketDataset(
-                Path(self.datadir, "test.npz")
-            )
+            if self.test_dataset is None:
+                self.test_dataset = ProcessedLigandPocketDataset(
+                    Path(self.datadir, "test.npz")
+                )
         else:
             raise NotImplementedError
 
@@ -226,10 +241,10 @@ class LigandPocketDDPM(pl.LightningModule):
             collate_fn=self.val_dataset.collate_fn,
         )
 
-    def test_dataloader(self):
+    def test_dataloader(self, batch_size=None):
         return DataLoader(
             self.test_dataset,
-            self.batch_size,
+            self.batch_size if batch_size is None else batch_size,
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self.test_dataset.collate_fn,
@@ -402,14 +417,18 @@ class LigandPocketDDPM(pl.LightningModule):
 
     def validation_step(self, data, *args):
         self._shared_eval(data, "val", *args)
+        
 
     def test_step(self, data, *args):
         self._shared_eval(data, "test", *args)
 
     def validation_epoch_end(self, validation_step_outputs):
         # edit to skip validation sampling steps for now.
-        pass
-
+        dataset = self.val_dataloader()
+        if (self.current_epoch + 1) % self.eval_epochs == 0:
+            rmsd, _, _, _ = self.sample_peptide_and_analyze(dataset, n_batches=self.eval_params.n_eval_samples)
+            self.log_metrics(rmsd, "val")
+            
         # # Perform validation on single GPU
         # # TODO: sample on multiple devices if available
         # if not self.trainer.is_global_zero:
@@ -442,6 +461,35 @@ class LigandPocketDDPM(pl.LightningModule):
         #         self.eval_params.keep_frames
         #     )
         #     print(f"Chain visualization took {time() - tic:.2f} seconds")
+
+    def test_epoch_end(self, outputs):
+        dataset = self.test_dataloader(batch_size=self.test_batch_size)
+        if self.test_batch_size is not None and self.test_n_samples is None:
+            average_over_batch = False
+        else:
+            average_over_batch = True
+        
+        rmsd, mean_time, times, names = self.sample_peptide_and_analyze(
+            dataset,
+            plot_distribution=True,
+            average_over_batch=average_over_batch,
+            timesteps=self.test_timesteps,
+            n_samples=self.test_n_samples,
+            n_time_batches=self.test_n_time_batches,
+        )
+        self.log_metrics(rmsd, "test")
+        self.log_metrics(mean_time, "test")
+
+        with open(self.outdir / "time.json", "w") as f:
+            json.dump(list(times), f)
+
+        if self.test_n_time_batches is None:
+            with open(self.outdir / "rmsd.json", "w") as f:
+                json.dump(float(rmsd["sample_rmsd"]), f)
+
+            with open(self.outdir / "names.json", "w") as f:
+                json.dump(names, f)
+
 
     @torch.no_grad()
     def sample_and_analyze(self, n_samples, dataset=None, batch_size=None):
@@ -541,6 +589,7 @@ class LigandPocketDDPM(pl.LightningModule):
         molecules = []
         atom_types = []
         aa_types = []
+
         for i in range(math.ceil(n_samples / batch_size)):
 
             n_samples_batch = min(batch_size, n_samples - len(molecules))
@@ -655,6 +704,101 @@ class LigandPocketDDPM(pl.LightningModule):
         )
         # visualize(str(outdir), dataset_info=self.dataset_info, wandb=wandb)
         visualize(str(outdir), dataset_info=self.dataset_info, wandb=None)
+
+    def sample_peptide_and_analyze(
+            self,
+            dataset, 
+            n_batches=None,
+            plot_distribution=False,
+            timesteps=None,
+            average_over_batch=True,
+            n_samples=None,
+            n_time_batches=None
+        ):
+        x_data = []
+        x_generated = []
+        times = []
+        names = []
+
+        for i, data in enumerate(dataset):
+            if n_batches is not None and i > n_batches:
+                break
+            if n_time_batches is not None and i > n_time_batches:
+                break
+
+            ligand, pocket = self.get_ligand_and_pocket(data)
+            names += data["names"]
+
+            # extend batch to number of samples if desired
+            if n_samples is not None:
+                ligand = utils.extend_batch_n_samples(ligand, n_samples)
+                pocket = utils.extend_batch_n_samples(pocket, n_samples)
+            
+            pocket_com_before = scatter_mean(pocket["x"], pocket["mask"], dim=0)
+            
+            time_start = time.time()
+            xh_lig, xh_pocket, lig_mask, pocket_mask = self.ddpm.sample_given_pocket(
+                pocket,
+                ligand["one_hot"],
+                ligand["mask"],
+                timesteps=timesteps,
+            )
+            time_end = time.time()
+            times.append(time_end - time_start)
+
+            pocket_com_after = scatter_mean(
+                xh_pocket[:, : self.x_dims], pocket_mask, dim=0
+            )
+            xh_lig[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[lig_mask]
+
+            x = xh_lig[:, : self.x_dims].detach().cpu()
+            x_data.extend(
+                utils.batch_to_list(ligand["x"].detach().cpu(), lig_mask.detach().cpu())
+            )
+            x_generated.extend(utils.batch_to_list(x, lig_mask.detach().cpu()))
+
+        save_plot = plot_distribution and n_time_batches is not None
+        rmsd = self.rmsd_peptide_sample(
+            x_data,
+            x_generated,
+            plot_distribution=save_plot,
+        )
+
+        times = np.array(times)
+        if average_over_batch:
+            batch_size = self.batch_size if self.test_batch_size is None else self.test_batch_size
+            times = times / batch_size
+
+        time_per_datapoint = np.mean(times)
+            
+        return rmsd, {"average_generation_time" : time_per_datapoint}, times, names
+
+
+    def rmsd_peptide_sample(
+        self, list_x_data, list_x_generated, plot_distribution=False
+    ):
+        # get the rmsd for each sample
+        rmsd_per_peptide = np.array(
+            [
+                self.rmsd_single_peptide(x_data, x_generated)
+                for x_data, x_generated in zip(list_x_data, list_x_generated)
+            ]
+        )
+        rmsd_per_peptide = rmsd_per_peptide
+        # save rmsd per peptide
+        np.save(self.outdir / "rmsd_per_peptide.npy", rmsd_per_peptide)
+        if plot_distribution:
+            plot_rmsd_distribution(self.outdir / "rmsd_dist.png", rmsd_per_peptide)
+
+        rmsd = rmsd_per_peptide.mean()
+
+        return {"sample_rmsd": rmsd}
+
+    def rmsd_single_peptide(self, x_data, x_generated):
+        x_diff = x_data.numpy() - x_generated.numpy()
+        x_dist = (x_diff**2).sum(axis=1)
+        rmsd = np.sqrt(x_dist.mean())
+        return rmsd
 
     def sample_chain_and_save(self, keep_frames):
         n_samples = 1
@@ -993,10 +1137,10 @@ class LigandPocketDDPM(pl.LightningModule):
 
     def generate_peptides(
         self,
-        pdb_path,
-        n_samples=5,
+        peptide,
+        pocket,
         timesteps=None,
-        atom_level=True,
+        return_frames=1,
         **kwargs,
     ):
         """
@@ -1009,29 +1153,28 @@ class LigandPocketDDPM(pl.LightningModule):
         Returns:
             list of molecules
         """
-        # atom_level = False if self.pocket_representation == "CA" else True
-        peptide, pocket = process_pmhc_pdb_file(
-            pdb_path,
-            self.pocket_type_encoder,
-            atom_level=atom_level,
-            n_samples=n_samples,
-            device=self.device,
-        )
 
         # Pocket's center of mass
         pocket_com_before = scatter_mean(pocket["x"], pocket["mask"], dim=0)
 
         xh_pep, xh_pocket, pep_mask, pocket_mask = self.ddpm.sample_given_pocket(
-            pocket, peptide["one_hot"], peptide["mask"], timesteps=timesteps
+            pocket, peptide["one_hot"], peptide["mask"], timesteps=timesteps, return_frames=return_frames
         )
 
         # Move generated molecule back to the original pocket position
-        pocket_com_after = scatter_mean(xh_pocket[:, : self.x_dims], pocket_mask, dim=0)
+        if return_frames == 1:
+            pocket_com_after = scatter_mean(xh_pocket[:, : self.x_dims], pocket_mask, dim=0)
+            xh_pep[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[pep_mask]
+        else:
+            for i in range(return_frames):
+                pocket_com_after = scatter_mean(xh_pocket[i, :,: self.x_dims], pocket_mask, dim=0)
+                xh_pep[i, :, : self.x_dims] += (pocket_com_before - pocket_com_after)[pep_mask]
+        
 
-        xh_pocket[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[
-            pocket_mask
-        ]
-        xh_pep[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[pep_mask]
+        # xh_pocket[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[
+        #     pocket_mask
+        # ]
+        # xh_pep[:, : self.x_dims] += (pocket_com_before - pocket_com_after)[pep_mask]
 
         return xh_pep
 
@@ -1078,3 +1221,58 @@ class WeightSchedule:
     def __call__(self, t_array):
         """all values in t_array are assumed to be integers in [0, T]"""
         return self.weights[t_array].to(t_array.device)
+
+
+
+def rotate_points(points, axis, angle):
+    """
+    Rotate a set of 3D points around a given axis by a specified angle.
+    
+    Arguments:
+    points -- numpy array of shape (N_points, D_dims) representing the 3D coordinates
+    axis -- numpy array of shape (3,) representing the axis of rotation
+    angle -- angle of rotation in radians
+    
+    Returns:
+    rotated_points -- numpy array of shape (N_points, D_dims) representing the rotated 3D coordinates
+    """
+    # Normalize the axis vector
+    axis = axis / np.linalg.norm(axis)
+    
+    # Calculate the rotation matrix
+    cos_theta = np.cos(angle)
+    sin_theta = np.sin(angle)
+    x, y, z = axis
+    rotation_matrix = torch.tensor([[cos_theta + (1 - cos_theta) * x ** 2, (1 - cos_theta) * x * y - sin_theta * z, (1 - cos_theta) * x * z + sin_theta * y],
+                                [(1 - cos_theta) * y * x + sin_theta * z, cos_theta + (1 - cos_theta) * y ** 2, (1 - cos_theta) * y * z - sin_theta * x],
+                                [(1 - cos_theta) * z * x - sin_theta * y, (1 - cos_theta) * z * y + sin_theta * x, cos_theta + (1 - cos_theta) * z ** 2]])
+    rotation_matrix = rotation_matrix.to(points.device)
+    # Apply the rotation matrix to the points
+    rotated_points = rotation_matrix @ points.T
+    
+    return rotated_points.T
+
+def rotate_points_around_axis(points, axis, angle, center):
+    """
+    Rotate a set of 3D points around a given axis by a specified angle.
+    
+    Arguments:
+    points -- numpy array of shape (N_points, D_dims) representing the 3D coordinates
+    axis -- numpy array of shape (3,) representing the axis of rotation
+    angle -- angle of rotation in radians
+    center -- numpy array of shape (3,) representing the center of rotation
+    
+    Returns:
+    rotated_points -- numpy array of shape (N_points, D_dims) representing the rotated 3D coordinates
+    """
+    # Translate the points to the origin
+    points = points - center
+    
+    # Rotate the points
+    rotated_points = rotate_points(points, axis, angle)
+    
+    # Translate the points back to the original position
+    rotated_points = rotated_points + center
+    
+    return rotated_points
+

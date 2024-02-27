@@ -34,10 +34,12 @@ class EGNNDynamics(nn.Module):
         aggregation_method="sum",
         update_pocket_coords=True,
         edge_cutoff=None,
+        use_nodes_noise_prediction=True,
     ):
         super().__init__()
         self.mode = mode
         self.edge_cutoff = edge_cutoff
+        self.use_nodes_noise_prediction = use_nodes_noise_prediction
 
         self.atom_encoder = nn.Sequential(
             nn.Linear(atom_nf, 2 * atom_nf), act_fn, nn.Linear(2 * atom_nf, joint_nf)
@@ -130,7 +132,10 @@ class EGNNDynamics(nn.Module):
         h_residues = self.residue_encoder(h_residues)
 
         if self.sin_encoding is not None:
-            h_atoms = h_atoms + self.sin_encoding(torch.arange(len(h_atoms)))
+            _, sizes = torch.unique(mask_atoms, return_counts=True)
+            h_atoms = h_atoms + self.sin_encoding(
+                torch.concatenate([torch.arange(s) for s in sizes]).to(self.device)
+            )
 
         # combine the two node types
         x = torch.cat((x_atoms, x_residues), dim=0)
@@ -147,10 +152,15 @@ class EGNNDynamics(nn.Module):
             h = torch.cat([h, h_time], dim=1)
 
         # get edges of a complete graph
-        edges = self.get_edges(mask, x)
+        if self.edge_cutoff is None:
+            edges=self.get_edges(mask, x)
+        else:
+            edges = self.get_edges_mhc_cutoff(
+                mask_atoms, mask_residues, x_atoms, x_residues
+            )
 
         if self.sin_encoding is not None:
-            edge_attr = torch.zeros(edges.shape[0], h.shape[1]).to(self.device)
+            edge_attr = torch.zeros(edges.shape[1], h_atoms.shape[1]).to(self.device)
             # get the subset of edges between atoms and atoms for each batch
             edges_atoms = self.get_edges(mask_atoms, x_atoms)
             edge_diff = edges_atoms[0] - edges_atoms[1]
@@ -158,10 +168,11 @@ class EGNNDynamics(nn.Module):
 
             _, sizes = torch.unique(edges_atoms[0], return_counts=True)
             atom_nodes = edges_atoms[0].unique()
-            atom_starts = torch.searchsorted(new_edges[0], atom_nodes)
-            atom_index = torch.repeat_interleave(atom_starts, sizes[mask_atoms])
+            atom_starts = torch.searchsorted(edges[0], atom_nodes)
+            atom_index = torch.repeat_interleave(atom_starts, sizes)
+
             atom_index = atom_index + torch.concatenate(
-                [torch.arange(s) for s in sizes[mask_atoms]]
+                [torch.arange(s).to(self.device) for s in sizes]
             )
             edge_attr[atom_index] = atom_edge_attr
 
@@ -206,12 +217,33 @@ class EGNNDynamics(nn.Module):
 
         # return torch.cat([vel[:len(mask_atoms)], h_final_atoms], dim=-1), \
         #        torch.cat([vel[len(mask_atoms):], h_final_residues], dim=-1)
-        return vel[: len(mask_atoms)] + h_final_atoms
+        noise_prediction = vel[: len(mask_atoms)]
+        if self.use_nodes_noise_prediction:
+            noise_prediction += h_final_atoms
+
+        return noise_prediction
 
     def get_edges(self, batch_mask, x):
         # TODO: cache batches for each example in self._edges_dict[n_nodes]
         adj = batch_mask[:, None] == batch_mask[None, :]
-        if self.edge_cutoff is not None:
-            adj = adj & (torch.cdist(x, x) <= self.edge_cutoff)
+        # if self.edge_cutoff is not None:
+        #     adj = adj & (torch.cdist(x, x) <= self.edge_cutoff)
+        edges = torch.stack(torch.where(adj), dim=0)
+        return edges
+
+    def get_edges_mhc_cutoff(
+        self, batch_mask_peptide, batch_mask_mhc, x_peptide, x_mhc
+    ):
+        """
+        Does the same as self.get_edges(), where a fully connected graph is created
+        using batch_mask = [batch_mask_peptide, batch_mask_mhc] and x = [x_peptide, x_mhc],
+        but instead cuts-off the edges within MHC only when they do not fall
+        within the cutoff radius.
+        """
+        mask = torch.cat([batch_mask_peptide, batch_mask_mhc])
+        x = torch.cat([x_peptide, x_mhc], dim=0)
+        adj = mask[:, None] == mask[None, :]
+        adj_mhc = torch.cdist(x_mhc, x_mhc) <= self.edge_cutoff
+        adj[len(batch_mask_peptide) :, len(batch_mask_peptide) :] &= adj_mhc
         edges = torch.stack(torch.where(adj), dim=0)
         return edges
