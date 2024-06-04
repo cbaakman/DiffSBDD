@@ -5,7 +5,8 @@ from pathlib import Path
 import warnings
 
 from Bio.PDB import PDBParser, PDBIO
-from Bio.PDB.Polypeptide import three_to_one
+#from Bio.PDB.Polypeptide import three_to_one
+from Bio.Data.IUPACData import protein_letters_3to1
 from Bio.PDB.Model import Model
 from Bio.PDB.Chain import Chain
 from Bio.PDB.Residue import Residue
@@ -75,7 +76,7 @@ def get_coords_and_types(chain, atom_level=True, device="cpu", interface_residue
                 continue
             if "CA" in res:
                 coord_list.append(res["CA"].get_coord())
-                types.append(three_to_one(res.get_resname()))
+                types.append(protein_letters_3to1[res.get_resname().capitalize()])
             else:
                 print(f"Carbon alpha atom missing in residue {res}, chain {chain}")
 

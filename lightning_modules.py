@@ -422,7 +422,7 @@ class LigandPocketDDPM(pl.LightningModule):
     def test_step(self, data, *args):
         self._shared_eval(data, "test", *args)
 
-    def validation_epoch_end(self, validation_step_outputs):
+    def fn_validation_epoch_end(self, validation_step_outputs):
         # edit to skip validation sampling steps for now.
         dataset = self.val_dataloader()
         if (self.current_epoch + 1) % self.eval_epochs == 0:
@@ -1178,7 +1178,7 @@ class LigandPocketDDPM(pl.LightningModule):
 
         return xh_pep
 
-    def configure_gradient_clipping(
+    def fn_configure_gradient_clipping(
         self, optimizer, optimizer_idx, gradient_clip_val, gradient_clip_algorithm
     ):
 
